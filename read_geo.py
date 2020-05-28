@@ -17,11 +17,20 @@ def load_obj(filename, serializer=pickle):
         obj = serializer.load(fin, encoding='latin1')
     return obj
 
+
+
+def get_geo_data(raw_dir, name):
+    filename = osp.join(raw_dir, name)
+    #print(raw_dir, name)
+    geo_data = load_obj(filename)
+    #A, X_train, Y_train, X_dev, Y_dev, X_test, Y_test, U_train, U_dev, U_test, classLatMedian, classLonMedian, userLocation = geo_data
+    return geo_data
+
 def load_geotext(raw_dir, name):
     filename = osp.join(raw_dir, name)
     #print(raw_dir, name)
-    data = load_obj(filename)
-    A, X_train, Y_train, X_dev, Y_dev, X_test, Y_test, U_train, U_dev, U_test, classLatMedian, classLonMedian, userLocation = data
+    geo_data = load_obj(filename)
+    A, X_train, Y_train, X_dev, Y_dev, X_test, Y_test, U_train, U_dev, U_test, classLatMedian, classLonMedian, userLocation = geo_data
     A.setdiag(0)
     A[A>0] = 1
     A = A.tocoo()
@@ -62,7 +71,7 @@ def load_geotext(raw_dir, name):
     data.val_mask = val_mask
     data.test_mask = test_mask
 
-    return data
+    return data, geo_data
 
 
 
@@ -112,6 +121,7 @@ class Geo(InMemoryDataset):
                  pre_transform=None):
         self.name = name
 
+        self.data_geo = None
         super(Geo, self).__init__(root, transform, pre_transform)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
@@ -164,7 +174,8 @@ class Geo(InMemoryDataset):
         pass
 
     def process(self):
-        data = load_geotext(self.raw_dir, 'dump.pkl')
+        data, data_geo = load_geotext(self.raw_dir, 'dump.pkl')
+        self.data_geo = data_geo
         data = data if self.pre_transform is None else self.pre_transform(data)
         torch.save(self.collate([data]), self.processed_paths[0])
 
