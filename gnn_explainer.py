@@ -98,7 +98,6 @@ def visualize_subgraph2(explainer, node_idx, edge_index, edge_mask, y=None, thre
                 to_be_deleted.append(i)
             elif edge_index[0, v] == edge_index[1, v]:
                 to_be_deleted.append(i)
-        pdb.set_trace()
         visible_edges = np.delete(visible_edges, to_be_deleted) 
 
         #print(visible_edges)
