@@ -39,6 +39,14 @@ def geo_eval(y_true, y_pred, U_eval, classLatMedian, classLonMedian, userLocatio
         
     return np.mean(distances), np.median(distances), acc_at_161, distances, latlon_true, latlon_pred
 
+def get_distance(user1, user2, userLocation):
+    lat1, lon1 = userLocation[user1].split(',')
+    lat2, lon2 = userLocation[user2].split(',')
+    lat1, lon1 = float(lat1), float(lon1)
+    lat2, lon2 = float(lat2), float(lon2)
+    distance = haversine((lat1, lon1), (lat2, lon2))
+    return distance
+
 '''
 dataset = 'Cora'
 path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', 'Planetoid')
@@ -98,7 +106,8 @@ def visualize_subgraph2(explainer, node_idx, edge_index, edge_mask, y=None, thre
                 to_be_deleted.append(i)
             elif edge_index[0, v] == edge_index[1, v]:
                 to_be_deleted.append(i)
-        visible_edges = np.delete(visible_edges, to_be_deleted) 
+       
+        #visible_edges = np.delete(visible_edges, to_be_deleted) 
 
         #print(visible_edges)
         edge_mask = edge_mask[visible_edges]
@@ -136,7 +145,7 @@ def visualize_subgraph2(explainer, node_idx, edge_index, edge_mask, y=None, thre
     print(mapping)
     G = nx.relabel_nodes(G, mapping)
     print(G.nodes())
-    mapping = {i: U[i].split('_')[1] + '\n' + userLocation[U[i]] for i in subset.tolist()}
+    mapping = {i: U[i].split('_')[1] + '\n' + str(int(all_distances[i])) for i in subset.tolist()}
     G = nx.relabel_nodes(G, mapping)
     print(G.nodes())
 
@@ -170,18 +179,89 @@ def visualize_subgraph2(explainer, node_idx, edge_index, edge_mask, y=None, thre
 
     return ax, G
 
+def visualize_subgraph3(explainer, node_idx, edge_index, edge_mask, y=None,
+                        threshold=None, **kwargs):
+    r"""Visualizes the subgraph around :attr:`node_idx` given an edge mask
+    :attr:`edge_mask`.
+
+    Args:
+        node_idx (int): The node id to explain.
+        edge_index (LongTensor): The edge indices.
+        edge_mask (Tensor): The edge mask.
+        y (Tensor, optional): The ground-truth node-prediction labels used
+            as node colorings. (default: :obj:`None`)
+        threshold (float, optional): Sets a threshold for visualizing
+            important edges. If set to :obj:`None`, will visualize all
+            edges with transparancy indicating the importance of edges.
+            (default: :obj:`None`)
+        **kwargs (optional): Additional arguments passed to
+            :func:`nx.draw`.
+
+    :rtype: :class:`matplotlib.axes.Axes`, :class:`networkx.DiGraph`
+    """
+
+    assert edge_mask.size(0) == edge_index.size(1)
+
+    # Only operate on a k-hop subgraph around `node_idx`.
+    subset, edge_index, _, hard_edge_mask = k_hop_subgraph(
+        node_idx, explainer.__num_hops__(), edge_index, relabel_nodes=True,
+        num_nodes=None, flow=explainer.__flow__())
+
+    edge_mask = edge_mask[hard_edge_mask]
+
+    if threshold is not None:
+        edge_mask = (edge_mask >= threshold).to(torch.float)
+
+    if y is None:
+        y = torch.zeros(edge_index.max().item() + 1,
+                        device=edge_index.device)
+    else:
+        y = y[subset].to(torch.float) / y.max().item()
+
+    data = Data(edge_index=edge_index, att=edge_mask, y=y,
+                num_nodes=y.size(0)).to('cpu')
+    G = to_networkx(data, node_attrs=['y'], edge_attrs=['att'])
+    distance_subset = all_distances[subset]
+    mapping = {k: i  for k, i in enumerate(subset.tolist())}
+    #mapping = {k: str(i) + '\n' + str(int(distance_subset[k])) for k, i in enumerate(subset.tolist())}
+    labels = {i: str(i) + '\n' + str(int(all_distances[i])) for i in subset.tolist()}
+    G = nx.relabel_nodes(G, mapping)
+
+    kwargs['with_labels'] = kwargs.get('with_labels') or True
+    kwargs['font_size'] = kwargs.get('font_size') or 10
+    kwargs['node_size'] = kwargs.get('node_size') or 800
+    kwargs['cmap'] = kwargs.get('cmap') or 'cool'
+
+    pos = nx.spring_layout(G)
+    ax = plt.gca()
+    for source, target, data in G.edges(data=True):
+        ax.annotate(
+            '', xy=pos[target], xycoords='data', xytext=pos[source],
+            textcoords='data', arrowprops=dict(
+                arrowstyle="->",
+                alpha=max(data['att'], 0.1),
+                shrinkA=sqrt(kwargs['node_size']) / 2.0,
+                shrinkB=sqrt(kwargs['node_size']) / 2.0,
+                connectionstyle="arc3,rad=0.1",
+            ))
+    nx.draw_networkx_nodes(G, pos, node_color=y.tolist(), **kwargs)
+    nx.draw_networkx_labels(G, pos, labels=labels, **kwargs)
+
+    return ax, G
 class Net(torch.nn.Module):
     def __init__(self):
         super(Net, self).__init__()
-        self.lin = Sequential(Linear(dataset.num_features, 300))
+        self.lin1 = Sequential(Linear(dataset.num_features, 300))
         self.conv1 = GCNConv(300, 300)
-        self.conv2 = GCNConv(300, dataset.num_classes)
+        self.conv2 = GCNConv(300, 300)
+        self.lin2 = Sequential(Linear(300, dataset.num_features))
 
     def forward(self, x, edge_index):
-        x = F.relu(self.lin(x))
-        x = F.relu(self.conv1(x, edge_index))
+        x = F.relu(self.lin1(x))
         x = F.dropout(x, training=self.training)
+        x = F.relu(self.conv1(x, edge_index))
         x = self.conv2(x, edge_index)
+        x = self.lin2(x)
         return F.log_softmax(x, dim=1)
 
 
@@ -211,20 +291,20 @@ mean, median, acc, _, _, _ = geo_eval(Y_test, y_pred_test, U_test, classLatMedia
 print(f"mean:{mean} median: {median} acc: {acc}")
 
 explainer = GNNExplainer(model, epochs=200)
-node_idx = 8000
+node_idx = 9000
 print(userLocation[U[node_idx]])
 
 node_feat_mask, edge_mask = explainer.explain_node(node_idx, x, edge_index)
 print("top features:\n", node_feat_mask.argsort()[-10:])
 print("top edges:\n", edge_index[:, edge_mask.argsort()[-10:]])
-only_topk_edges = 50
-
-ax, G = visualize_subgraph2(explainer, node_idx, edge_index, edge_mask, y=data.y, threshold=None, only_topk_edges=only_topk_edges)
-plt.savefig(f"{node_idx}-{U[node_idx]}-{only_topk_edges}.pdf")
-plt.close()
+only_topk_edges = 20
+all_distances = torch.FloatTensor([get_distance(U[node_idx], u, userLocation) for u in U])
+#ax, G = visualize_subgraph2(explainer, node_idx, edge_index, edge_mask, y=all_distances, threshold=None, only_topk_edges=only_topk_edges, cmap=plt.cm.cool)
+#plt.savefig(f"{node_idx}-{U[node_idx]}-{only_topk_edges}.pdf")
+#plt.close()
 #print(data.y)
 
-ax, G = explainer.visualize_subgraph(node_idx, edge_index, edge_mask, y=data.y, threshold=None, only_topk_edges=only_topk_edges)
+ax, G = visualize_subgraph3(explainer, node_idx, edge_index, edge_mask, y=all_distances, threshold=None, only_topk_edges=only_topk_edges, cmap=plt.cm.cool)
 plt.savefig(f"{node_idx}-{U[node_idx]}-{only_topk_edges} - original.pdf")
 plt.close()
 
