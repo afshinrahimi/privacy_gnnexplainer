@@ -59,7 +59,7 @@ dataset = 'geotext'
 path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', 'geo')
 dataset = Geo(path, dataset, transform=None)
 data = dataset[0]
-A, X_train, Y_train, X_dev, Y_dev, X_test, Y_test, U_train, U_dev, U_test, classLatMedian, classLonMedian, userLocation = get_geo_data(dataset.raw_dir, 'dump.pkl')
+A, X_train, Y_train, X_dev, Y_dev, X_test, Y_test, U_train, U_dev, U_test, classLatMedian, classLonMedian, userLocation, vocab = get_geo_data(dataset.raw_dir, 'dump.pkl')
 U = U_train + U_dev + U_test
 locs = np.array([userLocation[u] for u in U])
 
@@ -252,16 +252,16 @@ class Net(torch.nn.Module):
     def __init__(self):
         super(Net, self).__init__()
         self.lin1 = Sequential(Linear(dataset.num_features, 300))
-        self.conv1 = GCNConv(300, 300)
-        self.conv2 = GCNConv(300, 300)
-        self.lin2 = Sequential(Linear(300, dataset.num_features))
+        self.conv1 = GCNConv(300, dataset.num_classes)
+        #self.conv2 = GCNConv(300, 300)
+        #self.lin2 = Sequential(Linear(300, dataset.num_features))
 
     def forward(self, x, edge_index):
         x = F.relu(self.lin1(x))
         x = F.dropout(x, training=self.training)
         x = F.relu(self.conv1(x, edge_index))
-        x = self.conv2(x, edge_index)
-        x = self.lin2(x)
+        #x = self.conv2(x, edge_index)
+        #x = self.lin2(x)
         return F.log_softmax(x, dim=1)
 
 

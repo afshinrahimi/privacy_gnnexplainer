@@ -7,6 +7,12 @@ import pickle
 import gzip
 import scipy as sp
 import pdb
+import os
+import logging
+from data import DataLoader, dump_obj, load_obj
+import networkx as nx
+logging.basicConfig(format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
+
 def index_to_mask(index, size):
     mask = torch.zeros((size, ), dtype=torch.bool)
     mask[index] = 1
@@ -29,8 +35,11 @@ def get_geo_data(raw_dir, name):
 def load_geotext(raw_dir, name):
     filename = osp.join(raw_dir, name)
     #print(raw_dir, name)
-    geo_data = load_obj(filename)
-    A, X_train, Y_train, X_dev, Y_dev, X_test, Y_test, U_train, U_dev, U_test, classLatMedian, classLonMedian, userLocation = geo_data
+    #geo_data = load_obj(filename)
+    #A, X_train, Y_train, X_dev, Y_dev, X_test, Y_test, U_train, U_dev, U_test, classLatMedian, classLonMedian, userLocation = geo_data
+    geo_data = preprocess_data(raw_dir, builddata=False)
+    #vocab = None
+    A, X_train, Y_train, X_dev, Y_dev, X_test, Y_test, U_train, U_dev, U_test, classLatMedian, classLonMedian, userLocation, vocab = geo_data
     A.setdiag(0)
     A[A>0] = 1
     A = A.tocoo()
@@ -70,10 +79,84 @@ def load_geotext(raw_dir, name):
     data.train_mask = train_mask
     data.val_mask = val_mask
     data.test_mask = test_mask
-
     return data, geo_data
 
+def preprocess_data(data_home, builddata=False, **kwargs):
+    bucket_size = kwargs.get('bucket', 300)
+    encoding = kwargs.get('encoding', 'latin1')
+    celebrity_threshold = kwargs.get('celebrity', 10)  
+    mindf = kwargs.get('mindf', 10)
+    dtype = kwargs.get('dtype', 'float32')
+    one_hot_label = kwargs.get('onehot', False)
+    vocab_file = os.path.join(data_home, 'vocab.pkl')
+    dump_file = os.path.join(data_home, 'dump.pkl')
+    if os.path.exists(dump_file) and os.path.exists(vocab_file) and not builddata:
+        logging.info('loading data from dumped file...')
+        data = load_obj(dump_file)
+        vocab = load_obj(vocab_file)
+        logging.info('loading data finished!')
+        return data, vocab
 
+    dl = DataLoader(data_home=data_home, bucket_size=bucket_size, encoding=encoding, 
+                    celebrity_threshold=celebrity_threshold, one_hot_labels=one_hot_label, mindf=mindf, token_pattern=r'(?u)(?<![@])#?\b\w\w+\b')
+    dl.load_data()
+    dl.assignClasses()
+    dl.tfidf()
+    vocab = dl.vectorizer.vocabulary_
+    #logging.info('saving vocab in {}'.format(vocab_file))
+    #dump_obj(vocab, vocab_file)
+    logging.info('vocab dumped successfully!')
+    U_test = dl.df_test.index.tolist()
+    U_dev = dl.df_dev.index.tolist()
+    U_train = dl.df_train.index.tolist()    
+
+    dl.get_graph()  
+    logging.info('creating adjacency matrix...')
+    adj = nx.adjacency_matrix(dl.graph, nodelist=range(len(U_train + U_dev + U_test)), weight='w')
+    
+    adj.setdiag(0)
+    #selfloop_value = np.asarray(adj.sum(axis=1)).reshape(-1,)
+    selfloop_value = 1
+    adj.setdiag(selfloop_value)
+    n,m = adj.shape
+    diags = adj.sum(axis=1).flatten()
+    with sp.errstate(divide='ignore'):
+        diags_sqrt = 1.0/sp.sqrt(diags)
+    diags_sqrt[sp.isinf(diags_sqrt)] = 0
+    D_pow_neghalf = sp.sparse.spdiags(diags_sqrt, [0], m, n, format='csr')
+    A = D_pow_neghalf * adj * D_pow_neghalf
+    A = A.astype(dtype)
+    logging.info('adjacency matrix created.')
+
+    X_train = dl.X_train
+    X_dev = dl.X_dev
+    X_test = dl.X_test
+    Y_test = dl.test_classes
+    Y_train = dl.train_classes
+    Y_dev = dl.dev_classes
+    classLatMedian = {str(c):dl.cluster_median[c][0] for c in dl.cluster_median}
+    classLonMedian = {str(c):dl.cluster_median[c][1] for c in dl.cluster_median}
+    
+    
+    
+    P_test = [str(a[0]) + ',' + str(a[1]) for a in dl.df_test[['lat', 'lon']].values.tolist()]
+    P_train = [str(a[0]) + ',' + str(a[1]) for a in dl.df_train[['lat', 'lon']].values.tolist()]
+    P_dev = [str(a[0]) + ',' + str(a[1]) for a in dl.df_dev[['lat', 'lon']].values.tolist()]
+    userLocation = {}
+    for i, u in enumerate(U_train):
+        userLocation[u] = P_train[i]
+    for i, u in enumerate(U_test):
+        userLocation[u] = P_test[i]
+    for i, u in enumerate(U_dev):
+        userLocation[u] = P_dev[i]
+    
+    data = (A, X_train, Y_train, X_dev, Y_dev, X_test, Y_test, U_train, U_dev, U_test, classLatMedian, classLonMedian, userLocation, vocab)
+    if not builddata:
+        logging.info('dumping data in {} ...'.format(str(dump_file)))
+        dump_obj(data, dump_file)
+        logging.info('data dump finished!')
+
+    return data
 
 class Geo(InMemoryDataset):
     r"""The citation network datasets "Cora", "CiteSeer" and "PubMed" from the
@@ -174,8 +257,7 @@ class Geo(InMemoryDataset):
         pass
 
     def process(self):
-        data, data_geo = load_geotext(self.raw_dir, 'dump.pkl')
-        self.data_geo = data_geo
+        data, _ = load_geotext(self.raw_dir, 'dump.pkl')
         data = data if self.pre_transform is None else self.pre_transform(data)
         torch.save(self.collate([data]), self.processed_paths[0])
 
