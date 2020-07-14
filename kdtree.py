@@ -1,3 +1,8 @@
+'''
+Created on 3 May 2016
+
+@author: af
+'''
 import copy
 import numpy as np
 
@@ -39,7 +44,7 @@ class KDTree:
             self.min_limit = copy.deepcopy(location)
             self.max_limit = copy.deepcopy(location)
             return
-        for i in xrange(self.dimensions):
+        for i in range(self.dimensions):
             self.min_limit[i] = min(self.min_limit[i], location[i])
             self.max_limit[i] = max(self.max_limit[i], location[i])
     
@@ -128,7 +133,7 @@ class KDTreeClustering():
             dimensions = len(X[0])
         
         self.kdtree = KDTree(bucket_size=self.bucket_size, dimensions=dimensions, parent=None)
-        for i in xrange(n_samples):
+        for i in range(n_samples):
             self.kdtree.add_point((i, X[i]))
         self.kdtree.nodeSplit(cursor=self.kdtree, empty_non_leaf=True)
         self.clusters = [leave.index_locations for leave in self.kdtree.getLeaves()]
@@ -156,3 +161,5 @@ if __name__ == '__main__':
     clusters = clusterer.get_clusters()
     
     pdb.set_trace()
+               
+        
